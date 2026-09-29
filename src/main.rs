@@ -1,6 +1,7 @@
-mod pages;
-
 #[tokio::main]
 async fn main() {
-    topcoat::start(pages::router()).await.unwrap();
+    dotenvy::dotenv().ok();
+    topcoat::start(clone_tabnews::pages::router())
+        .await
+        .unwrap();
 }
