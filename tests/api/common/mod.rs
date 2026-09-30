@@ -4,6 +4,6 @@ static INIT: Once = Once::new();
 
 pub fn setup() {
     INIT.call_once(|| {
-        dotenvy::dotenv().ok();
+        dotenvy::from_filename(".env.development").ok();
     });
 }
