@@ -1,31 +1,48 @@
-use crate::infra::database::query;
-use serde_json::json;
+use crate::infra::database::{self, query};
+use serde_json::{Value, json};
 use topcoat::{
     Result,
-    router::{StatusCode, content::Json, response::IntoResponse, route},
+    router::{
+        StatusCode,
+        content::Json,
+        error::{RouterErrorExt, internal_server_error},
+        response::IntoResponse,
+        route,
+    },
 };
 
 #[route(GET)]
 async fn status() -> Result<impl IntoResponse> {
-    let updated_at = chrono::offset::Utc::now().to_rfc3339();
-    let database_status_query = match query("SELECT current_setting('server_version') AS server_version, \
-                                                        current_setting('max_connections')::int AS max_connections, \
-                                                        count(*)::int AS opened_connections FROM pg_stat_activity WHERE datname = current_database();", &[]).await {
-        Ok(rows) => rows,
+    Ok(match collect_status().await {
+        Ok(body) => (StatusCode::OK, Json(body)),
         Err(e) => {
-            eprintln!("erro na query de status: {e:?}");
-            return Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))))
+            eprintln!("database error: {e}");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "database": "unavailable" })),
+            )
         }
-    };
-    let Some(row) = database_status_query.first() else {
-        return Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({}))));
-    };
-    let version: String = row.get("server_version");
-    let max_connections: i32 = row.get("max_connections");
-    let opened_connections: i32 = row.get("opened_connections");
-    Ok((
-        StatusCode::OK,
-        Json(json!({
+    })
+}
+
+async fn collect_status() -> Result<serde_json::Value> {
+    const STATUS_SQL: &str = "SELECT current_setting('server_version') AS server_version, \
+        current_setting('max_connections')::int AS max_connections, \
+        count(*)::int AS opened_connections FROM pg_stat_activity WHERE datname = current_database();";
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let rows = database::query(STATUS_SQL, &[])
+        .await
+        .map_err(internal_server_error)?;
+    let row = rows.first().ok_or_else(|| {
+        internal_server_error(std::io::Error::other("status query returned no rows"))
+    })?;
+
+    let version: String = row.try_get("server_version")?;
+    let max_connections: i32 = row.try_get("max_connections")?;
+    let opened_connections: i32 = row.try_get("opened_connections")?;
+
+    Ok(json!(
+        {
             "updated_at": updated_at,
             "dependencies": {
                 "database": {
@@ -34,6 +51,6 @@ async fn status() -> Result<impl IntoResponse> {
                     "opened_connections": opened_connections
                 }
             }
-        })),
+        }
     ))
 }
