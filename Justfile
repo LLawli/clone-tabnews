@@ -2,7 +2,7 @@ default:
   just --list --unsorted
 
 dev:
-  just services-up && cargo run
+  just services-up && cargo watch -x run
 
 lint-check:
   cargo fmt --check
