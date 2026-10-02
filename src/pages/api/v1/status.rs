@@ -1,13 +1,9 @@
 use crate::infra::database;
-use serde_json::{Value, json};
+use serde_json::json;
 use topcoat::{
     Result,
     router::{
-        StatusCode,
-        content::Json,
-        error::{RouterErrorExt, internal_server_error},
-        response::IntoResponse,
-        route,
+        StatusCode, content::Json, error::internal_server_error, response::IntoResponse, route,
     },
 };
 
