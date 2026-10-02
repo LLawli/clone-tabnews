@@ -1,7 +1,7 @@
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{env, sync::OnceLock};
 use tokio_postgres::{
-    Config, Row,
+    Client, Config, Row,
     config::{ChannelBinding, SslMode},
     types::ToSql,
 };
@@ -21,6 +21,8 @@ pub enum DbError {
     Rustls(#[from] rustls::Error),
     #[error("POSTGRES_CA definido mas sem nenhum certificado")]
     EmptyCa,
+    #[error("migration: {0}")]
+    Migration(#[from] refinery::Error),
 }
 
 fn build_tls() -> Result<MakeRustlsConnect, DbError> {
@@ -58,7 +60,8 @@ fn tls() -> Result<MakeRustlsConnect, DbError> {
     Ok(TLS.get_or_init(|| t).clone())
 }
 
-pub async fn query(sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, DbError> {
+pub async fn connect() -> Result<Client, DbError> {
+    let dev = env::var("ENV").is_ok_and(|v| v == "development");
     let mut config = Config::new();
     config
         .host(&env::var("POSTGRES_HOST")?)
@@ -66,30 +69,27 @@ pub async fn query(sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>
         .user(&env::var("POSTGRES_USER")?)
         .password(&env::var("POSTGRES_PASSWORD")?)
         .dbname(&env::var("POSTGRES_DB")?)
-        .ssl_mode(if &env::var("ENV")? == "development" {
+        .ssl_mode(if dev {
             SslMode::Prefer
         } else {
             SslMode::Require
         })
-        .channel_binding(if &env::var("ENV")? == "development" {
+        .channel_binding(if dev {
             ChannelBinding::Prefer
         } else {
             ChannelBinding::Require
         });
-    let (client, connection) = match config.connect(tls()?).await {
-        Ok(client_connection) => client_connection,
-        Err(e) => {
-            eprintln!("Database connection error: {}", e);
-            return Err(DbError::from(e));
-        }
-    };
 
+    let (client, connection) = config.connect(tls()?).await?;
     tokio::spawn(async move {
         if let Err(e) = connection.await {
-            eprintln!("erro na conexão com o Postgres: {e}")
+            eprintln!("Error in Postgres connection: {}", e)
         }
     });
+    Ok(client)
+}
 
-    let result = client.query(sql, params).await?;
-    Ok(result)
+pub async fn query(sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, DbError> {
+    let client = connect().await?;
+    Ok(client.query(sql, params).await?)
 }
